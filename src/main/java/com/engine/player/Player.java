@@ -19,9 +19,9 @@ public class Player {
     private Block selectedBlock = Block.STONE;
     private Raycast.RaycastResult targetBlock = new Raycast.RaycastResult();
 
-    // Hotbar blocks corresponding to keys 1-9
+    // Hotbar blocks corresponding to keys 1-9: Slot 3 (index 2) is Torch
     private static final Block[] HOTBAR = {
-        Block.STONE, Block.DIRT, Block.GRASS, Block.COBBLESTONE,
+        Block.STONE, Block.DIRT, Block.TORCH, Block.COBBLESTONE,
         Block.WOOD, Block.PLANKS, Block.LEAVES, Block.SAND, Block.GLASS
     };
     private int hotbarIndex = 0;
@@ -95,7 +95,7 @@ public class Player {
                 int py = targetBlock.adjacentPos.y;
                 int pz = targetBlock.adjacentPos.z;
 
-                boolean collidesWithPlayer = !flying &&
+                boolean collidesWithPlayer = !flying && selectedBlock.solid &&
                     (position.x - 0.35f < px + 1 && position.x + 0.35f > px &&
                      position.y < py + 1 && position.y + PlayerPhysics.PLAYER_HEIGHT > py &&
                      position.z - 0.35f < pz + 1 && position.z + 0.35f > pz);
@@ -190,6 +190,10 @@ public class Player {
 
     public Raycast.RaycastResult getTargetBlock() {
         return targetBlock;
+    }
+
+    public boolean isHoldingTorch() {
+        return selectedBlock == Block.TORCH;
     }
 }
 

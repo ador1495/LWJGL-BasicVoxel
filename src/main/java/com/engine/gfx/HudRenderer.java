@@ -113,11 +113,11 @@ public class HudRenderer {
         float startY = screenH - slotSize - 16.0f;
 
         // Distinct preview colors for the 9 hotbar blocks:
-        // Stone, Dirt, Grass, Cobblestone, Wood, Planks, Leaves, Sand, Glass
+        // Stone, Dirt, Torch, Cobblestone, Wood, Planks, Leaves, Sand, Glass
         float[][] blockColors = {
             {0.5f, 0.5f, 0.5f},      // Stone
             {0.45f, 0.32f, 0.2f},    // Dirt
-            {0.3f, 0.65f, 0.2f},     // Grass
+            {1.0f, 0.72f, 0.22f},    // Torch (Gold/Flame)
             {0.38f, 0.38f, 0.38f},   // Cobblestone
             {0.4f, 0.3f, 0.18f},     // Wood
             {0.7f, 0.55f, 0.35f},    // Planks

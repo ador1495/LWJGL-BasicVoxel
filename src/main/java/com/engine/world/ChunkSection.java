@@ -13,8 +13,10 @@ public class ChunkSection {
     private final int sectionY;
     private final int sectionZ;
 
-    private Mesh mesh;
-    private boolean dirty = true;
+    private final Mesh opaqueMesh;
+    private final Mesh translucentMesh;
+    private volatile boolean dirty = true;
+    private volatile boolean building = false;
     private final AABB aabb;
 
     public ChunkSection(int sectionX, int sectionY, int sectionZ) {
@@ -26,7 +28,8 @@ public class ChunkSection {
         int worldY = sectionY * SIZE;
         int worldZ = sectionZ * SIZE;
         this.aabb = new AABB(worldX, worldY, worldZ, worldX + SIZE, worldY + SIZE, worldZ + SIZE);
-        this.mesh = new Mesh();
+        this.opaqueMesh = new Mesh();
+        this.translucentMesh = new Mesh();
     }
 
     public static int getIndex(int x, int y, int z) {
@@ -68,8 +71,28 @@ public class ChunkSection {
         this.dirty = dirty;
     }
 
+    public boolean isBuilding() {
+        return building;
+    }
+
+    public void setBuilding(boolean building) {
+        this.building = building;
+    }
+
     public Mesh getMesh() {
-        return mesh;
+        return opaqueMesh;
+    }
+
+    public Mesh getOpaqueMesh() {
+        return opaqueMesh;
+    }
+
+    public Mesh getTranslucentMesh() {
+        return translucentMesh;
+    }
+
+    public boolean hasMesh() {
+        return !opaqueMesh.isEmpty() || !translucentMesh.isEmpty();
     }
 
     public int getSectionX() {
@@ -101,8 +124,11 @@ public class ChunkSection {
     }
 
     public void cleanup() {
-        if (mesh != null) {
-            mesh.cleanup();
+        if (opaqueMesh != null) {
+            opaqueMesh.cleanup();
+        }
+        if (translucentMesh != null) {
+            translucentMesh.cleanup();
         }
     }
 }

@@ -6,6 +6,7 @@ import com.engine.core.Window;
 import com.engine.gfx.BlockOutlineRenderer;
 import com.engine.gfx.HudRenderer;
 import com.engine.gfx.Shader;
+import com.engine.gfx.SkyRenderer;
 import com.engine.gfx.TextureArray;
 import com.engine.player.Player;
 import com.engine.world.World;
@@ -49,10 +50,12 @@ public class Main {
         TextureArray textures = new TextureArray();
         BlockOutlineRenderer outlineRenderer = new BlockOutlineRenderer();
         HudRenderer hudRenderer = new HudRenderer();
+        SkyRenderer skyRenderer = new SkyRenderer();
 
         System.out.println("[VoxelEngine] Initializing World & Player...");
         World world = new World(12345L);
         Player player = new Player(8.0f, 85.0f, 8.0f);
+        com.engine.world.DaylightCycle daylightCycle = new com.engine.world.DaylightCycle();
         System.out.println("[VoxelEngine] Engine ready. Starting game loop...");
 
         double titleUpdateTimer = 0;
@@ -97,16 +100,32 @@ public class Main {
                 world.changeRenderDistance(-1);
             }
 
+            // Daylight cycle controls: 'T' to advance time, 'P' to pause/resume
+            if (Input.isKeyPressed(GLFW.GLFW_KEY_T)) {
+                daylightCycle.advanceTime(1.0f / 24.0f); // Advance 1 hour
+            }
+            if (Input.isKeyPressed(GLFW.GLFW_KEY_P)) {
+                daylightCycle.togglePause();
+            }
+
+            // Update daylight cycle
+            daylightCycle.update(dt);
+
             // Update player and world
             player.update(world, dt);
             world.update(player.getPosition());
             player.getCamera().update(window.getWidth(), window.getHeight());
 
-            // Clear frame
+            // Clear frame with dynamic sky color from daylight cycle
+            Vector3f skyColor = daylightCycle.getSkyColor();
+            GL11.glClearColor(skyColor.x, skyColor.y, skyColor.z, 1.0f);
             GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
 
-            // Render voxel world with face culling & frustum culling
-            world.render(player.getCamera(), chunkShader, textures);
+            // Render procedural sky with Sun, Moon, stars, and atmospheric scattering
+            skyRenderer.render(player.getCamera(), daylightCycle);
+
+            // Render voxel world with face culling, smooth lighting, reflections & translucent water
+            world.render(player.getCamera(), chunkShader, textures, daylightCycle, player.getPosition(), player.isHoldingTorch());
 
             // Render wireframe outline around targeted voxel
             if (player.getTargetBlock().hit) {
@@ -121,14 +140,13 @@ public class Main {
                 titleUpdateTimer = Time.getTime();
                 Vector3f pos = player.getPosition();
                 String title = String.format(
-                    "%s | FPS: %d | Pos: %.1f, %.1f, %.1f | Chunks: %d (Dist: %d) | Drawn: %d, Culled: %d | %s | [+/- Chunks]",
+                    "%s | FPS: %d | Pos: %.1f, %.1f, %.1f | Chunks: %d (Dist: %d) | %s | %s | [T: Time, P: Pause, +/- Chunks]",
                     APP_TITLE,
                     Time.getFps(),
                     pos.x, pos.y, pos.z,
                     world.getLoadedChunksCount(),
                     world.getRenderDistance(),
-                    world.getRenderedSectionsCount(),
-                    world.getCulledSectionsCount(),
+                    daylightCycle.getTimeString(),
                     player.isFlying() ? "[FLYING (Double-Space)]" : "[WALK (Double-Space)]"
                 );
                 window.setTitle(title);

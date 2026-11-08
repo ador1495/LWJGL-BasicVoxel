@@ -6,6 +6,7 @@ import com.engine.gfx.Mesh;
 import com.engine.gfx.Shader;
 import com.engine.gfx.TextureArray;
 import org.joml.Vector3f;
+import org.lwjgl.opengl.GL11;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -19,7 +20,21 @@ public class World {
     private final WorldGenerator generator;
     private final ExecutorService executor;
     private final ConcurrentLinkedQueue<MeshTaskResult> uploadQueue = new ConcurrentLinkedQueue<>();
-    private final Set<ChunkSection> queuedSections = ConcurrentHashMap.newKeySet();
+    private final List<ChunkSection> visibleSections = new ArrayList<>(1024);
+
+    public static class BlockPos {
+        public final int x, y, z;
+        public BlockPos(int x, int y, int z) { this.x = x; this.y = y; this.z = z; }
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof BlockPos p)) return false;
+            return x == p.x && y == p.y && z == p.z;
+        }
+        @Override public int hashCode() {
+            return 31 * (31 * x + y) + z;
+        }
+    }
+    private final Set<BlockPos> placedTorches = ConcurrentHashMap.newKeySet();
 
     private int renderedSectionsCount = 0;
     private int culledSectionsCount = 0;
@@ -27,9 +42,9 @@ public class World {
 
     private static class MeshTaskResult {
         final ChunkSection section;
-        final ChunkMeshBuilder.MeshData data;
+        final ChunkMeshBuilder.SectionMeshData data;
 
-        MeshTaskResult(ChunkSection section, ChunkMeshBuilder.MeshData data) {
+        MeshTaskResult(ChunkSection section, ChunkMeshBuilder.SectionMeshData data) {
             this.section = section;
             this.data = data;
         }
@@ -57,6 +72,7 @@ public class World {
         long key = chunkKey(chunkX, chunkZ);
         return chunks.computeIfAbsent(key, k -> {
             Chunk chunk = new Chunk(chunkX, chunkZ);
+            chunk.setWorld(this);
             wireNeighbors(chunk, chunkX, chunkZ);
             generator.generateChunk(chunk);
             return chunk;
@@ -105,43 +121,61 @@ public class World {
         MeshTaskResult result;
         while (uploads < MAX_UPLOADS_PER_FRAME && (result = uploadQueue.poll()) != null) {
             if (result.data != null) {
-                result.section.getMesh().upload(result.data.vertexBuffer, result.data.indexBuffer, result.data.indexCount);
+                if (result.data.opaque != null) {
+                    result.section.getOpaqueMesh().upload(result.data.opaque.vertexBuffer, result.data.opaque.indexBuffer, result.data.opaque.indexCount);
+                } else {
+                    result.section.getOpaqueMesh().cleanup();
+                }
+                if (result.data.translucent != null) {
+                    result.section.getTranslucentMesh().upload(result.data.translucent.vertexBuffer, result.data.translucent.indexBuffer, result.data.translucent.indexCount);
+                } else {
+                    result.section.getTranslucentMesh().cleanup();
+                }
             } else {
-                result.section.getMesh().cleanup();
+                result.section.cleanup();
             }
-            result.section.setDirty(false);
-            queuedSections.remove(result.section);
+            result.section.setBuilding(false);
             uploads++;
         }
 
-        // 2. Load chunks in render distance
+        // 2. Ensure chunks in render distance + 1 are generated so neighbors exist for meshing
+        int loadDist = renderDistance + 1;
+        for (int dx = -loadDist; dx <= loadDist; dx++) {
+            for (int dz = -loadDist; dz <= loadDist; dz++) {
+                if (dx * dx + dz * dz > (loadDist + 0.5f) * (loadDist + 0.5f)) {
+                    continue;
+                }
+                getOrCreateChunk(playerChunkX + dx, playerChunkZ + dz);
+            }
+        }
+
+        // 3. Queue dirty sections for meshing ONLY when fully wired with all 4 neighbors
         for (int dx = -renderDistance; dx <= renderDistance; dx++) {
             for (int dz = -renderDistance; dz <= renderDistance; dz++) {
-                int cx = playerChunkX + dx;
-                int cz = playerChunkZ + dz;
-
-                // Circular distance check
                 if (dx * dx + dz * dz > (renderDistance + 0.5f) * (renderDistance + 0.5f)) {
                     continue;
                 }
 
-                Chunk chunk = getOrCreateChunk(cx, cz);
+                Chunk chunk = getChunk(playerChunkX + dx, playerChunkZ + dz);
+                if (chunk == null || !chunk.isGenerated() || !chunk.isFullyWired()) {
+                    continue;
+                }
 
-                // Queue dirty sections for meshing
                 for (int y = 0; y < Chunk.SECTIONS_COUNT; y++) {
                     ChunkSection section = chunk.getSection(y);
-                    if (section.isDirty() && !queuedSections.contains(section)) {
+                    if (section.isDirty() && !section.isBuilding()) {
                         if (section.isEmpty()) {
-                            section.getMesh().cleanup();
+                            section.cleanup();
                             section.setDirty(false);
                             continue;
                         }
 
-                        queuedSections.add(section);
+                        section.setBuilding(true);
                         final int sectionIdx = y;
                         executor.submit(() -> {
+                            section.setDirty(false);
                             ChunkMeshBuilder builder = new ChunkMeshBuilder();
-                            ChunkMeshBuilder.MeshData data = builder.buildMesh(chunk, sectionIdx);
+                            ChunkMeshBuilder.SectionMeshData data = builder.buildMesh(chunk, sectionIdx);
                             uploadQueue.offer(new MeshTaskResult(section, data));
                         });
                     }
@@ -150,34 +184,65 @@ public class World {
         }
     }
 
-    public void render(Camera camera, Shader shader, TextureArray textures) {
+    public void render(Camera camera, Shader shader, TextureArray textures, DaylightCycle daylightCycle, Vector3f playerPos, boolean holdingTorch) {
         Frustum frustum = camera.getFrustum();
         shader.bind();
         shader.setUniform("u_ViewProjection", camera.getViewProjectionMatrix());
         shader.setUniform("u_CameraPos", camera.getPosition());
+        shader.setUniform("u_PlayerPos", playerPos);
         shader.setUniform("u_TextureArray", 0);
         textures.bindToUnit(0);
+
+        // Dynamic handheld torchlight
+        if (holdingTorch) {
+            Vector3f heldPos = new Vector3f(playerPos).add(0.0f, 1.2f, 0.0f);
+            float flicker = 1.0f + 0.04f * (float) Math.sin(com.engine.core.Time.getTime() * 14.0);
+            shader.setUniform("u_HeldTorchPos", heldPos);
+            shader.setUniform("u_HeldTorchLight", new Vector3f(1.0f * flicker, 0.68f * flicker, 0.28f * flicker));
+        } else {
+            shader.setUniform("u_HeldTorchLight", new Vector3f(0.0f, 0.0f, 0.0f));
+        }
+
+        // Dynamic placed torchlights (up to 16 closest within radius)
+        int torchCount = 0;
+        for (BlockPos p : placedTorches) {
+            if (torchCount >= 16) break;
+            float dx = p.x + 0.5f - camera.getPosition().x;
+            float dy = p.y + 0.5f - camera.getPosition().y;
+            float dz = p.z + 0.5f - camera.getPosition().z;
+            if (dx * dx + dy * dy + dz * dz < 32.0f * 32.0f) {
+                shader.setUniform("u_PlacedTorches[" + torchCount + "]", p.x + 0.5f, p.y + 0.5f, p.z + 0.5f);
+                torchCount++;
+            }
+        }
+        shader.setUniform("u_NumPlacedTorches", torchCount);
+        shader.setUniform("u_Time", (float) com.engine.core.Time.getTime());
+
+        // Dynamic lighting uniforms from DaylightCycle
+        shader.setUniform("u_LightDir", daylightCycle.getLightDir());
+        shader.setUniform("u_LightColor", daylightCycle.getLightColor());
+        shader.setUniform("u_AmbientColor", daylightCycle.getAmbientColor());
+        shader.setUniform("u_FogColor", daylightCycle.getSkyColor());
 
         // Distance fog parameters
         float fogEnd = (renderDistance - 0.5f) * Chunk.CHUNK_SIZE;
         float fogStart = fogEnd * 0.70f;
         shader.setUniform("u_FogStart", fogStart);
         shader.setUniform("u_FogEnd", fogEnd);
-        shader.setUniform("u_FogColor", 0.65f, 0.82f, 1.0f); // Bright sky blue
 
         renderedSectionsCount = 0;
         culledSectionsCount = 0;
         totalSectionsCount = 0;
+        visibleSections.clear();
 
+        // 1. Frustum culling pass
         for (Chunk chunk : chunks.values()) {
             for (int y = 0; y < Chunk.SECTIONS_COUNT; y++) {
                 ChunkSection section = chunk.getSection(y);
-                Mesh mesh = section.getMesh();
-                if (mesh.isEmpty()) continue;
+                if (!section.hasMesh()) continue;
 
                 totalSectionsCount++;
 
-                // Frustum Culling
                 float minX = section.getWorldX();
                 float minY = section.getWorldY();
                 float minZ = section.getWorldZ();
@@ -190,12 +255,41 @@ public class World {
                     continue;
                 }
 
-                shader.setUniform("u_ChunkOffset", minX, minY, minZ);
-                mesh.render();
+                visibleSections.add(section);
                 renderedSectionsCount++;
             }
         }
 
+        // 2. Pass 1: Opaque geometry (Solid blocks, dirt, grass, stone, wood, etc.)
+        GL11.glDisable(GL11.GL_BLEND);
+        GL11.glDepthMask(true);
+
+        for (int i = 0; i < visibleSections.size(); i++) {
+            ChunkSection section = visibleSections.get(i);
+            Mesh opaque = section.getOpaqueMesh();
+            if (!opaque.isEmpty()) {
+                shader.setUniform("u_ChunkOffset", (float) section.getWorldX(), (float) section.getWorldY(), (float) section.getWorldZ());
+                opaque.render();
+            }
+        }
+
+        // 3. Pass 2: Translucent geometry (Water with Fresnel & transparency, depth write disabled)
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glDepthMask(false); // Prevents water from occluding the riverbed/seabed
+
+        for (int i = 0; i < visibleSections.size(); i++) {
+            ChunkSection section = visibleSections.get(i);
+            Mesh trans = section.getTranslucentMesh();
+            if (!trans.isEmpty()) {
+                shader.setUniform("u_ChunkOffset", (float) section.getWorldX(), (float) section.getWorldY(), (float) section.getWorldZ());
+                trans.render();
+            }
+        }
+
+        // Restore OpenGL state
+        GL11.glDepthMask(true);
+        GL11.glDisable(GL11.GL_BLEND);
         shader.unbind();
     }
 
@@ -221,6 +315,14 @@ public class World {
         int lz = worldZ & 15;
         chunk.setBlock(lx, worldY, lz, blockId);
 
+        // Update placed torch tracking
+        BlockPos pos = new BlockPos(worldX, worldY, worldZ);
+        if (blockId == Block.TORCH.id) {
+            placedTorches.add(pos);
+        } else {
+            placedTorches.remove(pos);
+        }
+
         // Immediate responsive rebuild for player interaction (sub-0.1ms)
         int sectionIdx = worldY >> 4;
         rebuildSectionImmediate(chunk, sectionIdx);
@@ -234,23 +336,47 @@ public class World {
         if (lz == 15 && chunk.south != null) rebuildSectionImmediate(chunk.south, sectionIdx);
     }
 
+    public int getTorchLightAt(int worldX, int worldY, int worldZ) {
+        if (placedTorches.isEmpty()) return 0;
+        int maxL = 0;
+        for (BlockPos p : placedTorches) {
+            int dist = Math.abs(worldX - p.x) + Math.abs(worldY - p.y) + Math.abs(worldZ - p.z);
+            if (dist < 14) {
+                int l = 14 - dist;
+                if (l > maxL) {
+                    maxL = l;
+                    if (maxL >= 14) break;
+                }
+            }
+        }
+        return maxL;
+    }
+
     private void rebuildSectionImmediate(Chunk chunk, int sectionIdx) {
         ChunkSection section = chunk.getSection(sectionIdx);
         if (section == null) return;
         if (section.isEmpty()) {
-            section.getMesh().cleanup();
+            section.cleanup();
             section.setDirty(false);
             return;
         }
         ChunkMeshBuilder builder = new ChunkMeshBuilder();
-        ChunkMeshBuilder.MeshData data = builder.buildMesh(chunk, sectionIdx);
+        ChunkMeshBuilder.SectionMeshData data = builder.buildMesh(chunk, sectionIdx);
         if (data != null) {
-            section.getMesh().upload(data.vertexBuffer, data.indexBuffer, data.indexCount);
+            if (data.opaque != null) {
+                section.getOpaqueMesh().upload(data.opaque.vertexBuffer, data.opaque.indexBuffer, data.opaque.indexCount);
+            } else {
+                section.getOpaqueMesh().cleanup();
+            }
+            if (data.translucent != null) {
+                section.getTranslucentMesh().upload(data.translucent.vertexBuffer, data.translucent.indexBuffer, data.translucent.indexCount);
+            } else {
+                section.getTranslucentMesh().cleanup();
+            }
         } else {
-            section.getMesh().cleanup();
+            section.cleanup();
         }
         section.setDirty(false);
-        queuedSections.remove(section);
     }
 
     public int getRenderedSectionsCount() {

@@ -6,7 +6,7 @@ import org.lwjgl.BufferUtils;
 
 public class TextureGenerator {
     public static final int TEXTURE_SIZE = 16;
-    public static final int NUM_TEXTURES = 20;
+    public static final int NUM_TEXTURES = 21;
 
     public static final int TEX_DIRT = 0;
     public static final int TEX_GRASS_TOP = 1;
@@ -28,6 +28,7 @@ public class TextureGenerator {
     public static final int TEX_DIAMOND_ORE = 17;
     public static final int TEX_GLOWSTONE = 18;
     public static final int TEX_SNOW = 19;
+    public static final int TEX_TORCH = 20;
 
     public static ByteBuffer generateTextureArray() {
         int bytesPerLayer = TEXTURE_SIZE * TEXTURE_SIZE * 4;
@@ -73,6 +74,7 @@ public class TextureGenerator {
             case TEX_DIAMOND_ORE -> makeOre(pixels, rand, new int[]{rgba(92, 240, 240, 255), rgba(45, 205, 215, 255)});
             case TEX_GLOWSTONE -> makeGlowstone(pixels, rand);
             case TEX_SNOW -> makeSnow(pixels, rand);
+            case TEX_TORCH -> makeTorch(pixels, rand);
             default -> {
                 for (int i = 0; i < pixels.length; i++) pixels[i] = rgba(255, 0, 255, 255);
             }
@@ -361,5 +363,48 @@ public class TextureGenerator {
         for (int i = 0; i < px.length; i++) {
             px[i] = palette[rand.nextInt(palette.length)];
         }
+    }
+
+    private static void makeTorch(int[] px, Random rand) {
+        // Transparent background
+        for (int i = 0; i < px.length; i++) {
+            px[i] = rgba(0, 0, 0, 0);
+        }
+
+        // Stick (columns 7 and 8, rows 5 to 15)
+        int woodLight = rgba(142, 98, 48, 255);
+        int woodDark = rgba(108, 72, 32, 255);
+        for (int y = 5; y < 16; y++) {
+            px[y * TEXTURE_SIZE + 7] = (y % 2 == 0) ? woodLight : woodDark;
+            px[y * TEXTURE_SIZE + 8] = (y % 2 == 1) ? woodLight : woodDark;
+        }
+
+        // Charcoal tip on top of stick (rows 3 and 4)
+        int coal = rgba(40, 40, 40, 255);
+        px[3 * TEXTURE_SIZE + 7] = coal;
+        px[3 * TEXTURE_SIZE + 8] = coal;
+        px[4 * TEXTURE_SIZE + 7] = coal;
+        px[4 * TEXTURE_SIZE + 8] = coal;
+
+        // Glowing fire flame (rows 0 to 4, columns 6 to 9)
+        int flameCore = rgba(255, 255, 210, 255); // Brilliant yellow-white core
+        int flameMid = rgba(255, 205, 45, 255);   // Golden yellow flame
+        int flameEdge = rgba(245, 115, 20, 240);  // Warm orange rim
+
+        px[0 * TEXTURE_SIZE + 7] = flameMid;
+        px[0 * TEXTURE_SIZE + 8] = flameMid;
+
+        px[1 * TEXTURE_SIZE + 6] = flameEdge;
+        px[1 * TEXTURE_SIZE + 7] = flameCore;
+        px[1 * TEXTURE_SIZE + 8] = flameCore;
+        px[1 * TEXTURE_SIZE + 9] = flameEdge;
+
+        px[2 * TEXTURE_SIZE + 6] = flameEdge;
+        px[2 * TEXTURE_SIZE + 7] = flameCore;
+        px[2 * TEXTURE_SIZE + 8] = flameCore;
+        px[2 * TEXTURE_SIZE + 9] = flameEdge;
+
+        px[3 * TEXTURE_SIZE + 6] = flameEdge;
+        px[3 * TEXTURE_SIZE + 9] = flameEdge;
     }
 }

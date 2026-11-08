@@ -7,7 +7,7 @@ A low-level, performance-focused Minecraft-style voxel engine built from scratch
 ## Architecture & Performance Optimizations
 
 ### 1. 4-Byte Packed Vertex Representation (89% Bandwidth Reduction)
-Traditional voxel engines pass 36+ bytes per vertex (positions, normals, UVs, AO factors as 32-bit floats). VoxelCraft compresses an entire quad vertex into **one single 32-bit integer (`int`)**:
+Traditional voxel engines pass 36+ bytes per vertex (positions, normals, UVs, AO factors, light values as 32-bit floats). VoxelCraft compresses an entire quad vertex into **one single 32-bit integer (`int`)**:
 
 | Bits | Field | Range / Purpose |
 | :--- | :--- | :--- |
@@ -15,9 +15,11 @@ Traditional voxel engines pass 36+ bytes per vertex (positions, normals, UVs, AO
 | `5..9` (5 bits) | Local Y | $0 \dots 16$ |
 | `10..14` (5 bits) | Local Z | $0 \dots 16$ |
 | `15..17` (3 bits) | Face Direction / Normal | UP, DOWN, NORTH, SOUTH, WEST, EAST ($0 \dots 5$) |
-| `18..24` (7 bits) | Texture Layer | Block texture index ($0 \dots 127$) |
-| `25..26` (2 bits) | Ambient Occlusion | Corner shadow level ($0 \dots 3$) |
-| `27..28` (2 bits) | UV Corner Index | Quad UV coordinates ($0 \dots 3$) |
+| `18..22` (5 bits) | Texture Layer | Block texture index ($0 \dots 31$) |
+| `23..24` (2 bits) | Ambient Occlusion | Corner shadow level ($0 \dots 3$) |
+| `25..26` (2 bits) | UV Corner Index | Quad UV coordinates ($0 \dots 3$) |
+| `27..30` (4 bits) | Smooth Light Level | Minecraft smooth light ($0 \dots 15$) |
+| `31` (1 bit) | Reserved / Sign | $0$ (guarantees positive integer) |
 
 In the GPU vertex shader (`chunk.vert`), hardware bitwise shifts unpack the attributes in parallel with zero CPU overhead. A full quad is only **16 bytes**.
 
@@ -31,45 +33,55 @@ In the GPU vertex shader (`chunk.vert`), hardware bitwise shifts unpack the attr
 - A fast AABB vs Frustum half-space test culls chunks outside the camera's field of view before sending any draw commands, eliminating **60%–75% of draw calls**.
 
 ### 4. Zero-Bleed `GL_TEXTURE_2D_ARRAY`
-- Instead of traditional 2D atlas sheets with texture bleeding across mipmap levels, textures are uploaded as a 3D Texture Array ($16 \times 16 \times 14$).
+- Instead of traditional 2D atlas sheets with texture bleeding across mipmap levels, textures are uploaded as a 3D Texture Array ($16 \times 16 \times 21$).
 - Eliminates border bleeding and edge artifacts at all distances without requiring UV padding hacks.
 
-### 5. Smooth Ambient Occlusion with Anisotropic Flip
-- 4-level vertex ambient occlusion is computed based on adjacent solid block corners:
-  $$\text{ao} = (\text{side}_1 \land \text{side}_2) \;?\; 0 \;:\; 3 - (\text{side}_1 + \text{side}_2 + \text{corner})$$
-- When $\text{ao}_0 + \text{ao}_2 > \text{ao}_1 + \text{ao}_3$, quad triangulation flips between $(0,1,2), (0,2,3)$ and $(1,2,3), (1,3,0)$ to prevent harsh diagonal shading artifacts.
+### 5. Authentic Minecraft Smooth Lighting & Ambient Occlusion
+- **Horizontal Sky Diffusion**: Sky light diffuses horizontally from open sky columns into caves, tunnels, and overhangs.
+- **4-Corner Per-Vertex Interpolation**: Each quad corner averages the 4 neighboring light values touching that corner:
+  $$\text{cornerLight} = \frac{L_{\text{center}} + L_{\text{side1}} + L_{\text{side2}} + L_{\text{corner}}}{4}$$
+- **Minecraft Light Curve**: Modulated through a perceptual power curve:
+  $$\text{lightFactor} = \text{mix}(0.06, 1.0, v_{\text{Light}}^{1.55})$$
+- 4-level vertex ambient occlusion with anisotropic triangulation flip prevents diagonal shading artifacts.
 
-### 6. Multi-Threaded Chunk Generation & Meshing
+### 6. Dynamic Handheld & Placed Torchlight
+- **Handheld Torch**: Holding the Torch in Slot 3 illuminates the world around the player with dynamic warm light ($16\text{ m}$ radius) with organic flame flicker.
+- **Placed Torches**: Placed torches in caves and buildings cast real-time 3D point light onto surrounding walls, ceilings, and floors.
+- **Self-Illuminating Flame**: Torch block textures feature transparent alpha cutouts and glowing full-bright flame rendering.
+
+### 7. Procedural Sky Shader (Sun, Moon, Stars & Atmosphere)
+- **Sun**: Radiant circular disk with corona and horizon-scattering glow at dawn/dusk.
+- **Moon**: Lunar body opposite the sun with crater textures and silver halo.
+- **Night Stars**: Twinkling directional star field that glitters across the night dome.
+- **Atmospheric Gradient**: Horizon-to-zenith color blending synced with the 24-hour dynamic daylight cycle.
+
+### 8. Reflections & Translucent Water
+- **Translucent Water**: Multi-pass rendering with depth writes disabled (`glDepthMask(false)`) and Schlick Fresnel reflections. No vertex wave displacement, maintaining $>100\text{ FPS}$.
+- **Ground Reflections**: Subtle environmental sky sheen and Blinn-Phong specular glints across stone, sand, and terrain.
+- **Player Contact Shadow**: Real-time dynamic contact shadow beneath player's feet projecting with celestial light angle.
+
+### 9. Multi-Threaded Chunk Generation & Meshing
 - Chunks and noise calculations run asynchronously across background worker threads (`Executors.newFixedThreadPool`).
+- Chunks only mesh once all 4 horizontal neighbors are fully wired, preventing boundary holes or water slice glitches.
 - The main thread only handles fast GPU buffer uploads ($<0.2\text{ ms}$ per frame).
-- Player block modifications feature **instantaneous delta rebuilding** for zero-latency building and mining.
-
-### 7. Amanatides & Woo Fast Voxel Traversal (DDA)
-- Exact grid raycasting traverses voxels step-by-step from the camera eye.
-- Computes targeted block and adjacent placement normal without tunneling through diagonal intersections.
-
-### 8. Swept AABB Player Physics
-- Real-time voxel collision resolution on X, Y, and Z axes independently.
-- Smooth walking, sprinting, jumping, sneaking, gravity, and ground friction.
-- Creative flight mode (`F` key) for rapid free-flying exploration.
 
 ---
 
-## Blocks & Textures
+## Blocks & Hotbar
 
-Procedurally synthesized 16x16 pixel-art textures (zero external PNG dependencies):
-1. **Grass** (Distinct top, side with fringe, and dirt bottom)
+1. **Stone**
 2. **Dirt**
-3. **Stone**
+3. **Torch** (Dynamic Handheld & Placed Lighting)
 4. **Cobblestone**
-5. **Wood Log** (Bark side, annual ring top)
+5. **Wood Log** (Bark side, ring top)
 6. **Planks**
 7. **Leaves** (Cutout foliage transparency)
 8. **Sand**
-9. **Water** (Translucent animated blue)
-10. **Bedrock** (Unbreakable)
-11. **Glass** (Clear pane with specular frame)
-12. **Brick**
+9. **Glass** (Clear pane with specular sheen)
+10. **Grass** (Upright dirt with green top fringe)
+11. **Water** (Translucent liquid)
+12. **Bedrock** (Unbreakable)
+13. **Brick**, **Ores** (Coal, Iron, Gold, Diamond), **Glowstone**, **Snow**
 
 ---
 
@@ -79,13 +91,16 @@ Procedurally synthesized 16x16 pixel-art textures (zero external PNG dependencie
 | :--- | :--- |
 | **W, A, S, D** | Move Forward / Left / Backward / Right |
 | **Mouse Look** | Rotate Camera Yaw and Pitch |
+| **Double-tap Space / F** | Toggle Creative Flying Mode |
 | **Space** | Jump (or fly up in Creative mode) |
 | **Left Shift** | Sneak (or fly down in Creative mode) |
 | **Left Ctrl** | Sprint |
-| **F** | Toggle Creative Flying Mode |
 | **Left Click** | Mine / Break targeted block |
-| **Right Click** | Place currently selected block |
-| **1 – 9 / Scroll Wheel** | Select active hotbar block |
+| **Right Click** | Place currently selected block / torch |
+| **1 – 9 / Scroll Wheel** | Select active hotbar block (**Key 3: Torch**) |
+| **+ / -** | Benchmark: Increase / Decrease Render Distance |
+| **T** | Advance Daylight Cycle (+1 Hour) |
+| **P** | Pause / Resume Daylight Cycle |
 | **Escape** | Unlock / Release Mouse Cursor |
 
 ---
@@ -112,6 +127,7 @@ LWJGL/
         │   │   └── Time.java        # Delta time & FPS calculation
         │   ├── gfx/
         │   │   ├── Shader.java      # Shader program & uniform caching
+        │   │   ├── SkyRenderer.java # Celestial sky, sun, moon & star renderer
         │   │   ├── TextureArray.java# GL_TEXTURE_2D_ARRAY texture manager
         │   │   ├── TextureGenerator.java # Procedural 16x16 pixel textures
         │   │   ├── Mesh.java        # Packed VAO/VBO/EBO renderer
@@ -120,10 +136,11 @@ LWJGL/
         │   ├── world/
         │   │   ├── Block.java       # Block definitions & face mappings
         │   │   ├── ChunkSection.java# 16x16x16 sub-chunk data
-        │   │   ├── Chunk.java       # 16x256x16 chunk column
-        │   │   ├── ChunkMeshBuilder.java # Face culling & AO mesher
-        │   │   ├── World.java       # Multithreaded chunk manager
-        │   │   ├── WorldGenerator.java   # Noise terrain & procedural trees
+        │   │   ├── Chunk.java       # 16x256x16 chunk column & lighting
+        │   │   ├── ChunkMeshBuilder.java # Face culling, smooth lighting & AO mesher
+        │   │   ├── DaylightCycle.java    # 24h celestial orbital cycle
+        │   │   ├── World.java       # Multithreaded chunk & torch light manager
+        │   │   ├── WorldGenerator.java   # Noise terrain, caves & procedural trees
         │   │   └── Noise.java       # Octave Simplex/Perlin noise
         │   ├── player/
         │   │   ├── Player.java      # State & controller
@@ -133,7 +150,9 @@ LWJGL/
         │       └── AABB.java        # 3D bounding box math
         └── resources/shaders/
             ├── chunk.vert           # Packed integer unpacking vertex shader
-            └── chunk.frag           # TextureArray, AO, lighting & fog shader
+            ├── chunk.frag           # Smooth lighting, torchlight, reflections & fog
+            ├── sky.vert             # Fullscreen sky quad vertex shader
+            └── sky.frag             # Sun, moon, craters, halo, stars & atmosphere
 ```
 
 ---
@@ -155,4 +174,3 @@ gradle run
 ```bash
 mvn compile exec:java
 ```
-

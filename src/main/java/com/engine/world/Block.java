@@ -21,7 +21,8 @@ public enum Block {
     GOLD_ORE((byte) 15, "Gold Ore", true, false, false, TextureGenerator.TEX_GOLD_ORE, TextureGenerator.TEX_GOLD_ORE, TextureGenerator.TEX_GOLD_ORE),
     DIAMOND_ORE((byte) 16, "Diamond Ore", true, false, false, TextureGenerator.TEX_DIAMOND_ORE, TextureGenerator.TEX_DIAMOND_ORE, TextureGenerator.TEX_DIAMOND_ORE),
     GLOWSTONE((byte) 17, "Glowstone", true, false, false, TextureGenerator.TEX_GLOWSTONE, TextureGenerator.TEX_GLOWSTONE, TextureGenerator.TEX_GLOWSTONE),
-    SNOW((byte) 18, "Snow", true, false, false, TextureGenerator.TEX_SNOW, TextureGenerator.TEX_DIRT, TextureGenerator.TEX_SNOW);
+    SNOW((byte) 18, "Snow", true, false, false, TextureGenerator.TEX_SNOW, TextureGenerator.TEX_DIRT, TextureGenerator.TEX_SNOW),
+    TORCH((byte) 19, "Torch", false, true, false, TextureGenerator.TEX_TORCH, TextureGenerator.TEX_TORCH, TextureGenerator.TEX_TORCH);
 
     public static final int FACE_UP = 0;    // +Y
     public static final int FACE_DOWN = 1;  // -Y

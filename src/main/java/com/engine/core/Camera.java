@@ -47,8 +47,10 @@ public class Camera {
         yaw += xOffset;
         pitch -= yOffset;
 
-        if (pitch > 89.0f) pitch = 89.0f;
-        if (pitch < -89.0f) pitch = -89.0f;
+        if (pitch > 89.0f)
+            pitch = 89.0f;
+        if (pitch < -89.0f)
+            pitch = -89.0f;
 
         updateVectors();
     }
@@ -114,4 +116,3 @@ public class Camera {
         this.fov = fov;
     }
 }
-
