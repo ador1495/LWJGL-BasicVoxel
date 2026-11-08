@@ -1,5 +1,6 @@
 bin/
 build/
+dist/
 .gradle/
 *.class
 .idea/
@@ -7,3 +8,4 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
